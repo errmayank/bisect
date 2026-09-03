@@ -1,0 +1,5 @@
+# Lockfile
+pnpm-lock.yaml
+
+# Misc.
+/static/

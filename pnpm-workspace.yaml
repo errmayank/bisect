@@ -1,0 +1,12 @@
+packages:
+  - "."
+
+engineStrict: true
+savePrefix: ""
+autoInstallPeers: false
+resolutionMode: highest
+
+allowBuilds:
+  esbuild: true
+  sharp: true
+  workerd: true
