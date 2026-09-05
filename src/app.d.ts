@@ -1,5 +1,9 @@
 declare global {
-  namespace App {}
+  namespace App {
+    interface Platform {
+      env: Cloudflare.Env;
+    }
+  }
 }
 
 export {};
