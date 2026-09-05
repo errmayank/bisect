@@ -15,6 +15,7 @@
     "format": "prettier --write ."
   },
   "devDependencies": {
+    "98.css": "0.1.21",
     "@sveltejs/adapter-cloudflare": "7.2.9",
     "@sveltejs/kit": "2.70.3",
     "@sveltejs/vite-plugin-svelte": "7.3.0",
