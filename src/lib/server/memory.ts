@@ -3,14 +3,14 @@ import { error } from "@sveltejs/kit";
 export const limits = {
   model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
   outputTokens: 300,
-  inputCharacters: 2000,
+  inputCharacters: 500,
   replyCharacters: 400,
   statementCharacters: 120,
   operations: 2,
   activeMemories: 20,
   historyPairs: 4,
   historyCharacters: 6000,
-  chatCalls: 10,
+  chatCalls: 50,
   dailyCalls: 60,
   sessionSeconds: 24 * 60 * 60,
 } as const;
