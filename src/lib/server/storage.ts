@@ -6,6 +6,7 @@ interface Session {
   conversationVersion: number;
   revision: number;
   chatCalls: number;
+  matchingCalls: number;
   expiresAt: number;
   memoryJson: string;
 }
@@ -39,6 +40,7 @@ export async function loadSession(
       .prepare(
         `SELECT sessions.id, conversation_version AS conversationVersion,
           active_revision AS revision, chat_call_count AS chatCalls,
+          matching_call_count AS matchingCalls,
           expires_at AS expiresAt, memory_json AS memoryJson
          FROM sessions JOIN memory_snapshots
           ON memory_snapshots.session_id = sessions.id
@@ -141,9 +143,20 @@ export async function resetConversation(database: D1Database, identifier: string
   }
 }
 
-export async function reserveChatCall(environment: Cloudflare.Env, state: SessionState) {
-  if (state.session.chatCalls >= limits.chatCalls) {
-    error(429, "This session has no messages remaining.");
+export async function reserveAiCall(
+  environment: Cloudflare.Env,
+  state: SessionState,
+  kind: "chat" | "match",
+) {
+  const column = kind === "chat" ? "chat_call_count" : "matching_call_count";
+  const allowance = kind === "chat" ? limits.chatCalls : limits.matchingCalls;
+  const usedCalls = kind === "chat" ? state.session.chatCalls : state.session.matchingCalls;
+  const exhausted =
+    kind === "chat"
+      ? "This session has no messages remaining."
+      : "This session has no memory matches remaining.";
+  if (usedCalls >= allowance) {
+    error(429, exhausted);
   }
   const { success } = await environment.AI_RATE_LIMITER.limit({
     key: `bisect:${state.session.id}`,
@@ -158,28 +171,44 @@ export async function reserveChatCall(environment: Cloudflare.Env, state: Sessio
     results = await environment.DB.batch([
       environment.DB.prepare(
         `UPDATE sessions
-         SET chat_call_count = chat_call_count + 1, last_activity_at = MAX(last_activity_at, ?)
-         WHERE id = ? AND expires_at > ? RETURNING chat_call_count`,
-      ).bind(timestamp, state.session.id, timestamp),
+         SET ${column} = ${column} + 1, last_activity_at = MAX(last_activity_at, ?)
+         WHERE id = ? AND expires_at > ? AND conversation_version = ? AND active_revision = ?
+         RETURNING ${column}`,
+      ).bind(
+        timestamp,
+        state.session.id,
+        timestamp,
+        state.session.conversationVersion,
+        state.session.revision,
+      ),
       environment.DB.prepare(
         `INSERT INTO daily_usage (usage_date, reserved_calls)
-         SELECT ?, 1 WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ? AND expires_at > ?)
+         SELECT ?, 1 WHERE EXISTS (
+           SELECT 1 FROM sessions WHERE id = ? AND expires_at > ?
+            AND conversation_version = ? AND active_revision = ?
+         )
          ON CONFLICT (usage_date) DO UPDATE SET reserved_calls = daily_usage.reserved_calls + 1
          RETURNING reserved_calls`,
-      ).bind(usageDate, state.session.id, timestamp),
+      ).bind(
+        usageDate,
+        state.session.id,
+        timestamp,
+        state.session.conversationVersion,
+        state.session.revision,
+      ),
     ]);
   } catch {
     const [session, daily] = await environment.DB.batch<{ usedCalls: number }>([
       environment.DB.prepare(
-        `SELECT chat_call_count AS usedCalls FROM sessions WHERE id = ? AND expires_at > ?`,
+        `SELECT ${column} AS usedCalls FROM sessions WHERE id = ? AND expires_at > ?`,
       ).bind(state.session.id, timestamp),
       environment.DB.prepare(
         `SELECT reserved_calls AS usedCalls FROM daily_usage WHERE usage_date = ?`,
       ).bind(usageDate),
     ]);
     if (!session.results.length) error(401, "Your session expired. Please refresh.");
-    if (session.results[0].usedCalls >= limits.chatCalls) {
-      error(429, "This session has no messages remaining.");
+    if (session.results[0].usedCalls >= allowance) {
+      error(429, exhausted);
     }
     if ((daily.results[0]?.usedCalls ?? 0) >= limits.dailyCalls) {
       error(429, "Today's shared AI allowance is used up. It resets at midnight UTC.");
@@ -188,7 +217,7 @@ export async function reserveChatCall(environment: Cloudflare.Env, state: Sessio
   }
 
   if (!results[0].results.length || !results[1].results.length) {
-    error(401, "Your session expired. Please refresh.");
+    error(409, "The conversation changed or expired. Refresh and try again.");
   }
 }
 
@@ -196,13 +225,13 @@ export async function saveTurn(
   database: D1Database,
   state: SessionState,
   content: string,
-  generated: { reply: string; memories: Memory[]; changed: boolean },
+  generated: { reply: string; memories: Memory[] },
 ) {
   const timestamp = Math.floor(Date.now() / 1000);
   const userIdentifier = crypto.randomUUID();
   const assistantIdentifier = crypto.randomUUID();
   const lastSequence = state.messages.at(-1)?.sequence ?? 0;
-  const revision = state.session.revision + Number(generated.changed);
+  const revision = state.session.revision + 1;
 
   // Every later write depends on this insert so a stale or expired session cannot leave a partial turn.
   const statements = [
@@ -225,46 +254,41 @@ export async function saveTurn(
         timestamp,
         lastSequence,
       ),
+    // The new snapshot needs its source user message before the assistant can reference it.
+    database
+      .prepare(
+        `INSERT INTO memory_snapshots (session_id, revision, memory_json, source_message_id, created_at)
+         SELECT session_id, ?, ?, id, ? FROM messages WHERE session_id = ? AND id = ?`,
+      )
+      .bind(
+        revision,
+        JSON.stringify(generated.memories),
+        timestamp,
+        state.session.id,
+        userIdentifier,
+      ),
     database
       .prepare(
         `INSERT INTO messages (session_id, id, sequence_number, role, content, memory_revision, created_at)
-         SELECT session_id, ?, ?, 'assistant', ?, memory_revision, ? FROM messages
+         SELECT session_id, ?, ?, 'assistant', ?, ?, ? FROM messages
          WHERE session_id = ? AND id = ? RETURNING id`,
       )
       .bind(
         assistantIdentifier,
         lastSequence + 2,
         generated.reply,
+        revision,
         timestamp,
         state.session.id,
         userIdentifier,
       ),
-  ];
-
-  if (generated.changed) {
-    statements.push(
-      database
-        .prepare(
-          `INSERT INTO memory_snapshots (session_id, revision, memory_json, source_message_id, created_at)
-           SELECT session_id, ?, ?, id, ? FROM messages WHERE session_id = ? AND id = ?`,
-        )
-        .bind(
-          revision,
-          JSON.stringify(generated.memories),
-          timestamp,
-          state.session.id,
-          userIdentifier,
-        ),
-    );
-  }
-  statements.push(
     database
       .prepare(
         `UPDATE sessions SET active_revision = ?, last_activity_at = MAX(last_activity_at, ?)
          WHERE id = ? AND EXISTS (SELECT 1 FROM messages WHERE session_id = sessions.id AND id = ?)`,
       )
       .bind(revision, timestamp, state.session.id, userIdentifier),
-  );
+  ];
 
   let results: D1Result[];
   try {

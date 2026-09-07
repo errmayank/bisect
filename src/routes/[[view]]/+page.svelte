@@ -2,9 +2,10 @@
   import { enhance } from "$app/forms";
   import { goto, invalidateAll } from "$app/navigation";
   import { page } from "$app/state";
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import type { SubmitFunction } from "@sveltejs/kit";
   import Turnstile from "$lib/Turnstile.svelte";
+  import Trace from "$lib/Trace.svelte";
   import type { PageProps } from "./$types";
 
   let { data, form }: PageProps = $props();
@@ -13,9 +14,29 @@
   );
   let chatTab = $state<HTMLLIElement>();
   let memoriesTab = $state<HTMLLIElement>();
+  let transcript = $state<HTMLDivElement>();
+  let messageInput = $state<HTMLTextAreaElement>();
+  let tracePanel = $state<{ traceResponse: (identifier: string) => void }>();
+  let highlightedSource = $state<string | null>(null);
   let draft = $state(untrack(() => form?.draft ?? ""));
   let feedback = $state(untrack(() => (form?.action !== "start" ? (form?.error ?? "") : "")));
   let pending = $state<"start" | "reset" | "chat" | null>(null);
+  let pendingMessage = $state<{
+    content: string;
+    sequence: number;
+    conversationVersion: number;
+  } | null>(null);
+  let loadingDots = $state(1);
+  let pendingMessageSaved = $derived(
+    pendingMessage !== null &&
+      data.session?.conversationVersion === pendingMessage.conversationVersion &&
+      data.messages.some(
+        message =>
+          message.role === "user" &&
+          message.sequence === pendingMessage?.sequence &&
+          message.content === pendingMessage?.content,
+      ),
+  );
   let verificationToken = $state("");
   let verificationError = $state(untrack(() => (form?.action === "start" ? form.error : "")));
   let verificationNeedsInteraction = $state(false);
@@ -29,6 +50,20 @@
       draft.length <= data.inputCharacters &&
       (data.session?.remainingChatCalls ?? 0) > 0,
   );
+
+  $effect(() => {
+    if (pending !== "chat") return;
+    loadingDots = 1;
+    const interval = setInterval(() => {
+      loadingDots = (loadingDots % 3) + 1;
+    }, 400);
+    return () => clearInterval(interval);
+  });
+
+  async function scrollToLatest() {
+    await tick();
+    if (transcript && selectedTab === "chat") transcript.scrollTop = transcript.scrollHeight;
+  }
 
   $effect(() => {
     if (
@@ -47,6 +82,23 @@
     await goto(`/${tab}`, { keepFocus: true, noScroll: true });
     (tab === "chat" ? chatTab : memoriesTab)?.focus();
   }
+
+  async function viewSource(identifier: string) {
+    await selectTab("chat");
+    await tick();
+    const source = document.getElementById("message-" + identifier);
+    source?.scrollIntoView({ block: "center" });
+    source?.focus({ preventScroll: true });
+    highlightedSource = identifier;
+  }
+
+  $effect(() => {
+    if (!highlightedSource) return;
+    const timeout = setTimeout(() => {
+      highlightedSource = null;
+    }, 2000);
+    return () => clearTimeout(timeout);
+  });
 
   function handleTabKeydown(event: KeyboardEvent) {
     let nextTab = selectedTab;
@@ -86,7 +138,7 @@
     if (!event.repeat && canSend) event.currentTarget.form?.requestSubmit();
   }
 
-  const submit: SubmitFunction = ({ action: actionUrl, cancel }) => {
+  const submit: SubmitFunction = ({ action: actionUrl, cancel, formData }) => {
     const action = actionUrl.searchParams.has("/chat")
       ? "chat"
       : actionUrl.searchParams.has("/reset")
@@ -105,6 +157,17 @@
 
     pending = action;
     if (action !== "start") feedback = "";
+    const submittedDraft = action === "chat" ? String(formData.get("message") ?? "") : "";
+    if (action === "chat" && data.session) {
+      pendingMessage = {
+        content: submittedDraft,
+        sequence: (data.messages.at(-1)?.sequence ?? 0) + 1,
+        conversationVersion: data.session.conversationVersion,
+      };
+      draft = "";
+      messageInput?.focus({ preventScroll: true });
+      void scrollToLatest();
+    }
 
     function reportError(message: string) {
       if (action === "start") verificationError = message;
@@ -116,10 +179,10 @@
         if (result.type === "error") {
           reportError("The request could not be confirmed. Refresh before trying again.");
         } else {
-          // Background session creation must not reset focus while the visitor types.
-          if (action !== "start") await update({ reset: false, invalidateAll: false });
+          // Applying chat results resets focus; refresh its data through invalidation instead.
+          if (action === "reset") await update({ reset: false, invalidateAll: false });
           if (result.type === "success") {
-            if (action === "chat" || action === "reset") draft = "";
+            if (action === "reset") draft = "";
           } else if (result.type === "failure") {
             reportError(
               typeof result.data?.error === "string"
@@ -135,11 +198,16 @@
       } catch {
         reportError("The conversation could not be refreshed. Refresh before trying again.");
       } finally {
+        if (action === "chat") {
+          if (result.type !== "success" && !pendingMessageSaved) draft = submittedDraft;
+          pendingMessage = null;
+        }
         if (action === "start") {
           verificationToken = "";
           verificationNeedsInteraction = false;
         }
         pending = null;
+        if (action === "chat") await scrollToLatest();
       }
     };
   };
@@ -154,7 +222,7 @@
 </svelte:head>
 
 <main>
-  <p>Chat normally. Bisect remembers facts and preferences you share.</p>
+  <p>Bisect remembers your messages. Select text in a reply to trace its source.</p>
 
   {#if feedback}
     <p role="alert">{feedback}</p>
@@ -209,7 +277,7 @@
         }}
         onkeydown={handleTabKeydown}
       >
-        <a href="/memories" tabindex="-1">Memories</a>
+        <a href="/memories" tabindex="-1">Memories ({data.memories.length})</a>
       </li>
     </menu>
 
@@ -240,25 +308,51 @@
 
       <div class="window-body">
         <!-- svelte-ignore a11y_no_noninteractive_tabindex (Allows keyboard scrolling.) -->
-        <div class="messages sunken-panel" role="log" aria-labelledby="chat-tab" tabindex="0">
-          {#if data.messages.length === 0}
+        <div
+          class="messages sunken-panel"
+          role="log"
+          aria-labelledby="chat-tab"
+          tabindex="0"
+          bind:this={transcript}
+        >
+          {#if data.messages.length === 0 && !pendingMessage}
             <p class="empty-message">No messages yet.</p>
           {:else}
             {#each data.messages as message (message.id)}
               <article
                 class="message"
+                class:source-message={highlightedSource === message.id}
                 data-role={message.role}
                 id={"message-" + message.id}
                 aria-label={message.role === "user" ? "You" : "Assistant"}
+                tabindex="-1"
               >
-                <p class="message-content">{message.content}</p>
-                {#if message.savedRevision !== null}
-                  <p class="memory-notice">
-                    <small>Memory updated (revision {message.savedRevision}).</small>
-                  </p>
+                <p
+                  class="message-content"
+                  data-assistant-message={message.role === "assistant" ? message.id : undefined}
+                >
+                  {message.content}
+                </p>
+                {#if message.role === "assistant"}
+                  <button
+                    class="keyboard-trace"
+                    type="button"
+                    disabled={pending !== null}
+                    onclick={() => tracePanel?.traceResponse(message.id)}>Trace memory</button
+                  >
                 {/if}
               </article>
             {/each}
+          {/if}
+          {#if pendingMessage && !pendingMessageSaved}
+            <article class="message" data-role="user" aria-label="You">
+              <p class="message-content">{pendingMessage.content}</p>
+            </article>
+          {/if}
+          {#if pending === "chat" && !pendingMessageSaved}
+            <div class="message" role="status" aria-label="Waiting for reply">
+              <p class="message-content" aria-hidden="true">{".".repeat(loadingDots)}</p>
+            </div>
           {/if}
         </div>
 
@@ -283,6 +377,7 @@
             maxlength={data.inputCharacters}
             required
             bind:value={draft}
+            bind:this={messageInput}
             readonly={pending === "chat" || pending === "reset"}
             onkeydown={handleComposerKeydown}
             aria-label="Message"
@@ -364,12 +459,22 @@
         {:else}
           <ul class="tree-view">
             {#each data.memories as memory (memory.id)}
-              <li>{memory.statement}</li>
+              <li class="memory-content">{memory.statement}</li>
             {/each}
           </ul>
         {/if}
       </div>
     </div>
+    <Trace
+      bind:this={tracePanel}
+      messages={data.messages}
+      {transcript}
+      session={data.session}
+      active={selectedTab === "chat"}
+      disabled={pending !== null}
+      selectionLimit={data.selectedCharacters}
+      onView={viewSource}
+    />
   {/if}
 </main>
 
@@ -429,9 +534,25 @@
   }
 
   .message {
+    position: relative;
     flex-shrink: 0;
     max-width: 80%;
     min-width: 0;
+  }
+
+  .source-message {
+    outline: 2px solid Highlight;
+  }
+
+  .keyboard-trace:not(:focus) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
   }
 
   .message[data-role="user"] {
@@ -439,14 +560,11 @@
     text-align: right;
   }
 
-  .message-content {
+  .message-content,
+  .memory-content {
     margin: 0;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-  }
-
-  .memory-notice {
-    margin: 0.25rem 0 0;
   }
 
   .composer {

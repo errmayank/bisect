@@ -3,12 +3,19 @@ import { generateTurn, isRecord, limits } from "$lib/server/memory";
 import {
   createSession,
   loadSession,
-  reserveChatCall,
+  reserveAiCall,
   resetConversation,
   saveTurn,
   sessionIdentifier,
   type SessionState,
 } from "$lib/server/storage";
+import {
+  matchMemories,
+  requireCurrentSnapshot,
+  selectedResponse,
+  traceMemory,
+  type MemoryMatch,
+} from "$lib/server/trace";
 import type { Actions, PageServerLoad, RequestEvent } from "./$types";
 
 const cookieName = "bisect_session";
@@ -55,14 +62,17 @@ export const load = (async event => {
     session: state
       ? {
           revision: state.session.revision,
+          conversationVersion: state.session.conversationVersion,
           expiresAt: state.session.expiresAt,
           remainingChatCalls: limits.chatCalls - state.session.chatCalls,
+          remainingMatchingCalls: limits.matchingCalls - state.session.matchingCalls,
         }
       : null,
     messages: state?.messages ?? [],
     memories: state?.memories.filter(memory => memory.active) ?? [],
     siteKey: environment.TURNSTILE_SITE_KEY,
     inputCharacters: limits.inputCharacters,
+    selectedCharacters: limits.selectedCharacters,
     loadError,
   };
 }) satisfies PageServerLoad;
@@ -153,10 +163,10 @@ export const actions = {
       if (typeof submitted !== "string") error(400, "Enter a message.");
       draft = submitted.slice(0, limits.inputCharacters);
       if (submitted.length > limits.inputCharacters) {
-        error(400, "Messages must be 2,000 characters or fewer.");
+        error(400, `Messages must be ${limits.inputCharacters} characters or fewer.`);
       }
-      const content = submitted.trim();
-      if (!content) error(400, "Enter a message.");
+      const content = submitted;
+      if (!content.trim()) error(400, "Enter a message.");
 
       const identifier = sessionIdentifier(event.cookies.get(cookieName));
       if (!identifier) error(401, "Start a verified session before sending a message.");
@@ -166,7 +176,7 @@ export const actions = {
         error(401, "Your session expired. Please start a new session.");
       }
 
-      await reserveChatCall(environment, state);
+      await reserveAiCall(environment, state, "chat");
       reserved = true;
       const generated = await generateTurn(environment, state.messages, state.memories, content);
       await saveTurn(environment.DB, state, content, generated);
@@ -175,4 +185,64 @@ export const actions = {
       return failure(cause, "chat", draft, reserved);
     }
   },
+  match: async event => {
+    let reserved = false;
+    try {
+      const { environment, state, message, question, selection } = await traceRequest(event);
+      let candidates: MemoryMatch["candidates"] = [];
+      if (state.memories.some(memory => memory.active)) {
+        await reserveAiCall(environment, state, "match");
+        reserved = true;
+        candidates = await matchMemories(
+          environment,
+          selection,
+          question.content,
+          message.content,
+          state.memories,
+        );
+      }
+      await requireCurrentSnapshot(environment.DB, state);
+      const match: MemoryMatch = {
+        messageId: message.id,
+        selection,
+        revision: state.session.revision,
+        conversationVersion: state.session.conversationVersion,
+        candidates,
+        trace:
+          candidates.length === 1
+            ? await traceMemory(environment.DB, state, message, candidates[0].id)
+            : null,
+      };
+      return { action: "match", error: "", draft: "", match };
+    } catch (cause) {
+      return failure(cause, "match", "", reserved);
+    }
+  },
+  trace: async event => {
+    try {
+      const { environment, state, form, message } = await traceRequest(event);
+      if (
+        form.get("revision") !== String(state.session.revision) ||
+        form.get("conversation_version") !== String(state.session.conversationVersion)
+      ) {
+        error(409, "The conversation changed. Select the text again to start a new match.");
+      }
+      const identifier = form.get("memory_id");
+      if (typeof identifier !== "string") error(400, "Choose a matching memory.");
+      const trace = await traceMemory(environment.DB, state, message, identifier);
+      return { action: "trace", error: "", draft: "", trace };
+    } catch (cause) {
+      return failure(cause, "trace");
+    }
+  },
 } satisfies Actions;
+
+async function traceRequest(event: RequestEvent) {
+  const environment = environmentFor(event);
+  const identifier = sessionIdentifier(event.cookies.get(cookieName));
+  if (!identifier) error(401, "Your session expired. Refresh to continue.");
+  const state = await loadSession(environment.DB, identifier);
+  if (!state) error(401, "Your session expired. Refresh to continue.");
+  const form = await event.request.formData();
+  return { environment, state, form, ...selectedResponse(state, form) };
+}
