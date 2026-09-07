@@ -2,8 +2,8 @@
   "extends": "./.svelte-kit/tsconfig.json",
   "compilerOptions": {
     "rewriteRelativeImportExtensions": true,
-    "allowJs": true,
-    "checkJs": true,
+    "allowJs": true, // https://github.com/cloudflare/workers-sdk/issues/14181
+    "checkJs": false,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
