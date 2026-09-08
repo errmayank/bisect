@@ -31,21 +31,33 @@
     messageId: string;
     text: string;
   }
-  let floating = $state<(SelectionText & { left: number; top: number }) | null>(null);
+  let highlighted = $state<SelectionText | null>(null);
   let selected = $state<SelectionText | null>(null);
   let match = $state<MemoryMatch | null>(null);
   let result = $state<MemoryTrace | null>(null);
   let feedback = $state("");
   let pending = $state<"match" | "trace" | null>(null);
   let dialog = $state<HTMLDialogElement>();
-  let traceButton = $state<HTMLButtonElement>();
   let requestNumber = 0;
+  let canTrace = $derived(
+    active &&
+      !disabled &&
+      session !== null &&
+      pending === null &&
+      selected === null &&
+      highlighted !== null &&
+      messages.some(message => message.id === highlighted?.messageId),
+  );
 
   function readSelection() {
     if (dialog?.open) return;
+    if (!active || disabled || !session) {
+      highlighted = null;
+      return;
+    }
     const selection = document.getSelection();
-    if (!active || disabled || !selection || selection.isCollapsed || selection.rangeCount !== 1) {
-      if (document.activeElement !== traceButton) floating = null;
+    if (!selection || selection.isCollapsed || selection.rangeCount !== 1) {
+      highlighted = null;
       return;
     }
     const range = selection.getRangeAt(0);
@@ -55,40 +67,30 @@
         : range.startContainer.parentElement;
     const content = element?.closest<HTMLElement>("[data-assistant-message]");
     const messageId = content?.dataset.assistantMessage;
+    const message = messages.find(item => item.id === messageId && item.role === "assistant");
     const text = selection.toString();
     if (
       !content ||
-      !messageId ||
+      !message ||
       !transcript?.contains(content) ||
       !content.contains(range.endContainer) ||
-      !text.trim()
+      !text.trim() ||
+      text.length > selectionLimit ||
+      !message.content.includes(text)
     ) {
-      floating = null;
+      highlighted = null;
       return;
     }
-    const bounds = range.getBoundingClientRect();
-    const viewport = transcript.getBoundingClientRect();
-    if (bounds.bottom < viewport.top || bounds.top > viewport.bottom) {
-      floating = null;
-      return;
-    }
-    floating = {
-      messageId,
-      text,
-      left: Math.max(8, Math.min(bounds.left, window.innerWidth - 120)),
-      top: Math.max(8, Math.min(bounds.bottom + 4, viewport.bottom - 26, window.innerHeight - 34)),
-    };
+    highlighted = { messageId: message.id, text };
   }
 
   onMount(() => {
     document.addEventListener("selectionchange", readSelection);
-    document.addEventListener("scroll", readSelection, true);
-    window.addEventListener("resize", readSelection);
+    document.addEventListener("focusin", readSelection);
     return () => {
       requestNumber += 1;
       document.removeEventListener("selectionchange", readSelection);
-      document.removeEventListener("scroll", readSelection, true);
-      window.removeEventListener("resize", readSelection);
+      document.removeEventListener("focusin", readSelection);
     };
   });
 
@@ -102,24 +104,27 @@
     ) {
       match = null;
       result = null;
-      feedback = "The conversation changed. Close this panel and select the text again.";
+      feedback = "The conversation changed. Close this panel and trace the reply again.";
     }
   });
 
   function close() {
+    const sourceIdentifier = selected?.messageId;
     requestNumber += 1;
     pending = null;
     selected = null;
     match = null;
     result = null;
-    floating = null;
+    highlighted = null;
     dialog?.close();
+    if (active && sourceIdentifier) {
+      document.getElementById("message-" + sourceIdentifier)?.focus({ preventScroll: true });
+    }
   }
 
   async function open(selection: SelectionText) {
-    if (disabled || !session) return;
-    selected = selection;
-    floating = null;
+    if (!canTrace) return;
+    selected = { messageId: selection.messageId, text: selection.text };
     match = null;
     result = null;
     feedback = "";
@@ -131,11 +136,6 @@
       return;
     }
     await request("match");
-  }
-
-  export function traceResponse(identifier: string) {
-    const message = messages.find(item => item.id === identifier && item.role === "assistant");
-    if (message) void open({ messageId: message.id, text: message.content });
   }
 
   async function request(action: "match" | "trace", memoryId?: string) {
@@ -203,16 +203,15 @@
   }
 </script>
 
-{#if floating && active && !disabled}
-  <button
-    class="trace-action"
-    style:left={floating.left + "px"}
-    style:top={floating.top + "px"}
-    bind:this={traceButton}
-    onpointerdown={event => event.preventDefault()}
-    onclick={() => floating && open(floating)}>Trace memory</button
-  >
-{/if}
+<button
+  type="button"
+  aria-haspopup="dialog"
+  disabled={!canTrace}
+  onpointerdown={event => {
+    if (event.button === 0) event.preventDefault();
+  }}
+  onclick={() => highlighted && open(highlighted)}>Trace memory</button
+>
 
 <dialog
   class="window trace-panel"
@@ -289,11 +288,11 @@
         <p>This traces stored context, not proof of what caused the reply.</p>
         <fieldset>
           <legend>Checked memory versions</legend>
-          <ol>
+          <ul>
             {#each result.steps as step (step.revision)}
               <li>Memory version {step.revision}: {step.present ? "present" : "absent"}</li>
             {/each}
-          </ol>
+          </ul>
         </fieldset>
         <p>
           Change in memory version {result.revision}: {result.added.length} added,
@@ -305,11 +304,6 @@
 </dialog>
 
 <style>
-  .trace-action {
-    position: fixed;
-    z-index: 3;
-  }
-
   .trace-panel {
     box-sizing: border-box;
     width: min(28rem, calc(100vw - 2rem));

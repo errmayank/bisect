@@ -24,13 +24,13 @@ export interface MemoryMatch {
 }
 
 const staleSelection =
-  "The conversation changed or expired. Select the text again to start a new match.";
+  "The conversation changed or expired. Trace the reply again to start a new match.";
 
 export function selectedResponse(state: SessionState, form: FormData) {
   const identifier = form.get("message_id");
   const selection = form.get("selection");
   const message = state.messages.find(item => item.id === identifier && item.role === "assistant");
-  if (!message) error(400, "Select text from an assistant response in this conversation.");
+  if (!message) error(400, "Choose an assistant reply in this conversation to trace.");
   if (
     typeof selection !== "string" ||
     !selection.trim() ||

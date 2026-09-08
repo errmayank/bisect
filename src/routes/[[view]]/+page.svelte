@@ -16,7 +16,6 @@
   let memoriesTab = $state<HTMLLIElement>();
   let transcript = $state<HTMLDivElement>();
   let messageInput = $state<HTMLTextAreaElement>();
-  let tracePanel = $state<{ traceResponse: (identifier: string) => void }>();
   let highlightedSource = $state<string | null>(null);
   let draft = $state(untrack(() => form?.draft ?? ""));
   let feedback = $state(untrack(() => (form?.action !== "start" ? (form?.error ?? "") : "")));
@@ -222,7 +221,7 @@
 </svelte:head>
 
 <main>
-  <p>Bisect remembers your messages. Select text in a reply to trace its source.</p>
+  <p>Bisect remembers your messages. Select text in a reply, then click Trace memory.</p>
 
   {#if feedback}
     <p role="alert">{feedback}</p>
@@ -301,6 +300,15 @@
             {data.session.remainingChatCalls === 1 ? "message" : "messages"} remaining
           </span>
         {/if}
+        <Trace
+          messages={data.messages}
+          {transcript}
+          session={data.session}
+          active={selectedTab === "chat"}
+          disabled={pending !== null}
+          selectionLimit={data.selectedCharacters}
+          onView={viewSource}
+        />
         <button type="submit" disabled={!data.session || pending !== null}>
           {pending === "reset" ? "Resetting..." : "Reset conversation"}
         </button>
@@ -333,14 +341,6 @@
                 >
                   {message.content}
                 </p>
-                {#if message.role === "assistant"}
-                  <button
-                    class="keyboard-trace"
-                    type="button"
-                    disabled={pending !== null}
-                    onclick={() => tracePanel?.traceResponse(message.id)}>Trace memory</button
-                  >
-                {/if}
               </article>
             {/each}
           {/if}
@@ -436,9 +436,6 @@
           </form>
         {/if}
 
-        {#if !data.session}
-          <p>Sessions expire after 24 hours.</p>
-        {/if}
         {#if data.session && data.session.remainingChatCalls <= 0}
           <p>This session has used all its messages.</p>
         {/if}
@@ -465,16 +462,6 @@
         {/if}
       </div>
     </div>
-    <Trace
-      bind:this={tracePanel}
-      messages={data.messages}
-      {transcript}
-      session={data.session}
-      active={selectedTab === "chat"}
-      disabled={pending !== null}
-      selectionLimit={data.selectedCharacters}
-      onView={viewSource}
-    />
   {/if}
 </main>
 
@@ -513,8 +500,12 @@
     align-items: center;
     gap: 8px;
     flex-shrink: 0;
-    align-self: flex-end;
+    justify-content: flex-end;
     margin: 8px 8px 0;
+  }
+
+  .conversation-actions > span {
+    margin-right: auto;
   }
 
   .messages {
@@ -542,17 +533,6 @@
 
   .source-message {
     outline: 2px solid Highlight;
-  }
-
-  .keyboard-trace:not(:focus) {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    min-width: 0;
-    min-height: 0;
-    padding: 0;
-    overflow: hidden;
-    clip-path: inset(50%);
   }
 
   .message[data-role="user"] {

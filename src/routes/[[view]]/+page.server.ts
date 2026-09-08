@@ -225,7 +225,7 @@ export const actions = {
         form.get("revision") !== String(state.session.revision) ||
         form.get("conversation_version") !== String(state.session.conversationVersion)
       ) {
-        error(409, "The conversation changed. Select the text again to start a new match.");
+        error(409, "The conversation changed. Trace the reply again to start a new match.");
       }
       const identifier = form.get("memory_id");
       if (typeof identifier !== "string") error(400, "Choose a matching memory.");
