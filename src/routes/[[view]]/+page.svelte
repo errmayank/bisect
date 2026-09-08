@@ -41,6 +41,8 @@
   let verificationNeedsInteraction = $state(false);
   let verificationAttempt = $state(0);
   let verificationForm = $state<HTMLFormElement>();
+  let verificationDialog = $state<HTMLDialogElement>();
+  let verificationVisible = $state(false);
   const automatedCheckMessage = "Running an automated check to help keep bots out...";
   let canSend = $derived(
     pending === null &&
@@ -63,6 +65,22 @@
     await tick();
     if (transcript && selectedTab === "chat") transcript.scrollTop = transcript.scrollHeight;
   }
+
+  $effect(() => {
+    if (!verificationDialog) return;
+    if (!data.session && !data.loadError) {
+      if (!verificationDialog.open) verificationDialog.showModal();
+      verificationVisible = true;
+    } else {
+      verificationVisible = false;
+      if (verificationDialog.open) {
+        verificationDialog.close();
+        if (data.session && selectedTab === "chat") {
+          messageInput?.focus({ preventScroll: true });
+        }
+      }
+    }
+  });
 
   $effect(() => {
     if (
@@ -382,59 +400,10 @@
             onkeydown={handleComposerKeydown}
             aria-label="Message"
             aria-describedby="message-limit"></textarea>
-          <div class="composer-actions">
-            <span class="verification-status">
-              <span role="status">
-                {#if !data.session && !verificationError}
-                  {#if pending === "start"}
-                    Starting chat...
-                  {:else if verificationToken}
-                    Verification complete.
-                  {:else if verificationNeedsInteraction}
-                    Complete the check below to continue.
-                  {:else}
-                    {automatedCheckMessage}
-                  {/if}
-                {/if}
-              </span>
-            </span>
-          </div>
           <button type="submit" disabled={!canSend}>
             {pending === "chat" ? "Sending..." : "SEND"}
           </button>
         </form>
-
-        {#if !data.session}
-          <form
-            class="verification-form"
-            class:interactive={verificationNeedsInteraction}
-            method="POST"
-            action="?/start"
-            use:enhance={submit}
-            bind:this={verificationForm}
-            aria-label="Session verification"
-            aria-busy={pending === "start"}
-          >
-            {#if verificationError}
-              <p role="alert">{verificationError}</p>
-              <button type="button" disabled={pending !== null} onclick={refreshVerification}>
-                Retry verification
-              </button>
-            {:else if pending !== "start"}
-              {#key verificationAttempt}
-                <Turnstile
-                  siteKey={data.siteKey}
-                  onToken={token => (verificationToken = token)}
-                  onError={message => (verificationError = message)}
-                  onInteraction={required => (verificationNeedsInteraction = required)}
-                />
-              {/key}
-            {/if}
-
-            <input type="hidden" name="turnstile_token" value={verificationToken} />
-            <noscript><p>JavaScript is required to complete verification.</p></noscript>
-          </form>
-        {/if}
 
         {#if data.session && data.session.remainingChatCalls <= 0}
           <p>This session has used all its messages.</p>
@@ -462,6 +431,57 @@
         {/if}
       </div>
     </div>
+  {/if}
+
+  <dialog
+    class="window verification-panel"
+    bind:this={verificationDialog}
+    aria-labelledby="verification-title"
+    aria-describedby="verification-status"
+    oncancel={event => event.preventDefault()}
+  >
+    <header class="title-bar">
+      <div class="title-bar-text" id="verification-title">Verification</div>
+    </header>
+    <form
+      class="window-body"
+      method="POST"
+      action="?/start"
+      use:enhance={submit}
+      bind:this={verificationForm}
+      aria-label="Session verification"
+      aria-busy={pending === "start"}
+    >
+      <p id="verification-status" role={verificationError ? "alert" : "status"}>
+        {#if verificationError}
+          {verificationError}
+        {:else if pending === "start"}
+          Starting chat...
+        {:else if verificationNeedsInteraction}
+          Complete the check below to continue.
+        {:else}
+          {automatedCheckMessage}
+        {/if}
+      </p>
+      {#if verificationError}
+        <button type="button" disabled={pending !== null} onclick={refreshVerification}>
+          Retry verification
+        </button>
+      {:else if verificationVisible && !data.session && pending !== "start"}
+        {#key verificationAttempt}
+          <Turnstile
+            siteKey={data.siteKey}
+            onToken={token => (verificationToken = token)}
+            onError={message => (verificationError = message)}
+            onInteraction={required => (verificationNeedsInteraction = required)}
+          />
+        {/key}
+      {/if}
+      <input type="hidden" name="turnstile_token" value={verificationToken} />
+    </form>
+  </dialog>
+  {#if !data.session && !data.loadError}
+    <noscript><p>JavaScript is required to complete verification.</p></noscript>
   {/if}
 </main>
 
@@ -570,14 +590,6 @@
     box-shadow: none;
   }
 
-  .composer-actions {
-    position: absolute;
-    left: 0.125rem;
-    right: 7.75rem;
-    bottom: 0.125rem;
-    pointer-events: none;
-  }
-
   textarea::-webkit-scrollbar {
     display: none;
   }
@@ -588,13 +600,25 @@
     bottom: 0.125rem;
   }
 
-  .verification-status {
-    display: block;
-    padding: 0.25rem 0.375rem;
-    overflow-wrap: anywhere;
+  .verification-panel {
+    box-sizing: border-box;
+    width: min(24rem, calc(100vw - 2rem));
+    max-height: calc(100dvh - 2rem);
+    border: 0;
+    overflow: hidden;
   }
 
-  .verification-form.interactive {
-    padding-top: 0.25rem;
+  .verification-panel[open] {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .verification-panel > .title-bar {
+    flex-shrink: 0;
+  }
+
+  .verification-panel > .window-body {
+    min-height: 0;
+    overflow: auto;
   }
 </style>
