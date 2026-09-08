@@ -2,7 +2,7 @@
   import { enhance } from "$app/forms";
   import { goto, invalidateAll } from "$app/navigation";
   import { page } from "$app/state";
-  import { tick, untrack } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import type { SubmitFunction } from "@sveltejs/kit";
   import Turnstile from "$lib/Turnstile.svelte";
   import Trace from "$lib/Trace.svelte";
@@ -65,6 +65,10 @@
     await tick();
     if (transcript && selectedTab === "chat") transcript.scrollTop = transcript.scrollHeight;
   }
+
+  onMount(() => {
+    void scrollToLatest();
+  });
 
   $effect(() => {
     if (!verificationDialog) return;
@@ -423,9 +427,9 @@
         {#if data.memories.length === 0}
           <p>No memories saved yet.</p>
         {:else}
-          <ul class="tree-view">
+          <ul class="memory-list">
             {#each data.memories as memory (memory.id)}
-              <li class="memory-content">{memory.statement}</li>
+              <li class="memory-content sunken-panel">{memory.statement}</li>
             {/each}
           </ul>
         {/if}
@@ -490,7 +494,9 @@
     display: flex;
     flex-direction: column;
     flex: 1;
+    min-width: 0;
     min-height: 0;
+    overflow: clip;
   }
 
   main > * {
@@ -501,18 +507,30 @@
     display: flex;
     flex-direction: column;
     flex: 1;
+    min-width: 0;
     min-height: 0;
+    overflow: clip;
   }
 
   #chat > .window-body {
     display: flex;
     flex-direction: column;
     flex: 1;
+    min-width: 0;
     min-height: 0;
+    overflow: clip;
   }
 
   #chat > .window-body > :not(.messages) {
     flex-shrink: 0;
+  }
+
+  #memories:not([hidden]) {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: none;
   }
 
   .conversation-actions {
@@ -534,8 +552,10 @@
     align-items: flex-start;
     gap: 0.375rem;
     flex: 1;
+    min-width: 0;
     min-height: 0;
     overflow-y: auto;
+    overscroll-behavior: none;
     padding: 0.5rem;
   }
 
@@ -567,6 +587,21 @@
     overflow-wrap: anywhere;
   }
 
+  .memory-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .memory-content {
+    padding: 8px;
+    overflow: visible;
+  }
+
+  .memory-content + .memory-content {
+    margin-top: 8px;
+  }
+
   .composer {
     position: relative;
   }
@@ -585,6 +620,7 @@
     padding-right: 5rem;
     resize: none;
     overflow-y: auto;
+    overscroll-behavior: none;
     scrollbar-width: none;
     /* The surrounding field-border provides the border for the entire composer. */
     box-shadow: none;
@@ -618,7 +654,9 @@
   }
 
   .verification-panel > .window-body {
+    min-width: 0;
     min-height: 0;
     overflow: auto;
+    overscroll-behavior: none;
   }
 </style>

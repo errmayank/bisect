@@ -16,17 +16,25 @@
 <style>
   :global(html) {
     color-scheme: light;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
   }
 
   :global(body) {
+    height: 100%;
     margin: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
   }
 
   .application-window {
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
+    width: 100%;
     height: 100dvh;
+    overflow: clip;
   }
 
   .title-bar {
@@ -37,6 +45,8 @@
     display: flex;
     flex-direction: column;
     flex: 1;
+    min-width: 0;
     min-height: 0;
+    overflow: clip;
   }
 </style>

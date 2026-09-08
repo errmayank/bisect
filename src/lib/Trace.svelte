@@ -322,8 +322,10 @@
   }
 
   .trace-panel > .window-body {
+    min-width: 0;
     min-height: 0;
     overflow: auto;
+    overscroll-behavior: none;
   }
 
   .selected-text,
