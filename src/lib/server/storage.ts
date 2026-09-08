@@ -73,16 +73,23 @@ export async function loadSession(
   };
 }
 
-export async function createSession(database: D1Database, previousIdentifier: string | null) {
+export async function createSession(
+  database: D1Database,
+  previousIdentifier: string | null,
+  country: string | null,
+) {
   const identifier = crypto.randomUUID();
   const timestamp = Math.floor(Date.now() / 1000);
   const expiresAt = timestamp + limits.sessionSeconds;
+  const sessionCountry =
+    country && /^[A-Z]{2}$/u.test(country) && country !== "XX" ? country : null;
   const statements = [
     database
       .prepare(
-        `INSERT INTO sessions (id, created_at, last_activity_at, expires_at) VALUES (?, ?, ?, ?)`,
+        `INSERT INTO sessions (id, created_at, last_activity_at, expires_at, country)
+         VALUES (?, ?, ?, ?, ?)`,
       )
-      .bind(identifier, timestamp, timestamp, expiresAt),
+      .bind(identifier, timestamp, timestamp, expiresAt, sessionCountry),
     database
       .prepare(
         `INSERT INTO memory_snapshots (session_id, revision, memory_json) VALUES (?, 0, '[]')`,

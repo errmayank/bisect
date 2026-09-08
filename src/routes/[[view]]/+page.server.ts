@@ -29,6 +29,9 @@ function environmentFor(event: RequestEvent) {
     error(404, "Not found");
   }
   if (!event.platform?.env) error(503, "The service is unavailable. Please try again later.");
+  if (event.platform.env.MAINTENANCE_MODE === "true") {
+    error(503, "Service temporarily unavailable.");
+  }
   return event.platform.env;
 }
 
@@ -126,7 +129,11 @@ async function startSession(event: RequestEvent) {
       error(400, "Verification failed or expired. Please complete a new challenge.");
     }
 
-    const created = await createSession(environment.DB, previousIdentifier);
+    const created = await createSession(
+      environment.DB,
+      previousIdentifier,
+      event.platform?.cf?.country ?? null,
+    );
     event.cookies.set(cookieName, created.identifier, {
       path: "/",
       httpOnly: true,
