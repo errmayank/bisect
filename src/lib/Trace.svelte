@@ -30,6 +30,7 @@
   interface SelectionText {
     messageId: string;
     text: string;
+    range: Range;
   }
   let highlighted = $state<SelectionText | null>(null);
   let selected = $state<SelectionText | null>(null);
@@ -50,7 +51,7 @@
   );
 
   function readSelection() {
-    if (dialog?.open) return;
+    if (selected) return;
     if (!active || disabled || !session) {
       highlighted = null;
       return;
@@ -81,7 +82,7 @@
       highlighted = null;
       return;
     }
-    highlighted = { messageId: message.id, text };
+    highlighted = { messageId: message.id, text, range: range.cloneRange() };
   }
 
   onMount(() => {
@@ -89,6 +90,7 @@
     document.addEventListener("focusin", readSelection);
     return () => {
       requestNumber += 1;
+      CSS.highlights.delete("bisect-trace-selection");
       document.removeEventListener("selectionchange", readSelection);
       document.removeEventListener("focusin", readSelection);
     };
@@ -96,7 +98,7 @@
 
   $effect(() => {
     if (!active || (selected && !messages.some(message => message.id === selected?.messageId))) {
-      close();
+      close(false);
     } else if (
       match &&
       (session?.revision !== match.revision ||
@@ -108,29 +110,44 @@
     }
   });
 
-  function close() {
-    const sourceIdentifier = selected?.messageId;
+  function close(restoreSelection = true) {
+    const previousSelection = selected;
     requestNumber += 1;
     pending = null;
     selected = null;
     match = null;
     result = null;
     highlighted = null;
+    CSS.highlights.delete("bisect-trace-selection");
     dialog?.close();
-    if (active && sourceIdentifier) {
-      document.getElementById("message-" + sourceIdentifier)?.focus({ preventScroll: true });
+    if (
+      restoreSelection &&
+      active &&
+      previousSelection &&
+      transcript?.isConnected &&
+      transcript.contains(previousSelection.range.startContainer) &&
+      transcript.contains(previousSelection.range.endContainer) &&
+      previousSelection.range.toString() === previousSelection.text
+    ) {
+      document
+        .getElementById("message-" + previousSelection.messageId)
+        ?.focus({ preventScroll: true });
+      const selection = document.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(previousSelection.range);
+      readSelection();
     }
   }
 
   async function open(selection: SelectionText) {
     if (!canTrace) return;
-    selected = { messageId: selection.messageId, text: selection.text };
+    selected = { ...selection, range: selection.range.cloneRange() };
+    CSS.highlights.set("bisect-trace-selection", new Highlight(selected.range));
     match = null;
     result = null;
     feedback = "";
     await tick();
     dialog?.showModal();
-    document.getSelection()?.removeAllRanges();
     if (selection.text.length > selectionLimit) {
       feedback = `Select ${selectionLimit} characters or fewer.`;
       return;
@@ -198,7 +215,7 @@
   }
 
   async function viewSource(identifier: string) {
-    close();
+    close(false);
     await onView(identifier);
   }
 </script>
@@ -218,13 +235,13 @@
   bind:this={dialog}
   aria-labelledby="trace-title"
   onclose={() => {
-    if (!dialog?.open) close();
+    if (!dialog?.open && selected) close();
   }}
 >
   <header class="title-bar">
     <div class="title-bar-text" id="trace-title">Trace memory</div>
     <div class="title-bar-controls">
-      <button type="button" aria-label="Close" onclick={close}></button>
+      <button type="button" aria-label="Close" onclick={() => close()}></button>
     </div>
   </header>
   <div class="window-body">
@@ -235,7 +252,7 @@
       {#if pending === "match"}
         Matching current memories...
       {:else if pending === "trace"}
-        Finding the source memory version...
+        Finding the source memory snapshot...
       {:else if session}
         {session.remainingMatchingCalls}
         {session.remainingMatchingCalls === 1 ? "match" : "matches"} remaining
@@ -265,7 +282,7 @@
     {/if}
     {#if result && !feedback}
       <p>
-        First saved in memory version {result.revision}.
+        First saved in memory snapshot {result.revision}.
         {#if result.availableInReply}
           Included in this reply's memory context.
         {:else}
@@ -282,20 +299,20 @@
       <details>
         <summary>Trace details</summary>
         <p>
-          Matched against memory version {result.matchingRevision}. Reply context: memory version
+          Matched against memory snapshot {result.matchingRevision}. Reply context: memory snapshot
           {result.replyRevision}.
         </p>
         <p>This traces stored context, not proof of what caused the reply.</p>
         <fieldset>
-          <legend>Checked memory versions</legend>
+          <legend>Checked memory snapshots</legend>
           <ul>
             {#each result.steps as step (step.revision)}
-              <li>Memory version {step.revision}: {step.present ? "present" : "absent"}</li>
+              <li>Memory snapshot {step.revision}: {step.present ? "present" : "absent"}</li>
             {/each}
           </ul>
         </fieldset>
         <p>
-          Change in memory version {result.revision}: {result.added.length} added,
+          Change in memory snapshot {result.revision}: {result.added.length} added,
           {result.removed.length} removed.
         </p>
       </details>
@@ -304,6 +321,11 @@
 </dialog>
 
 <style>
+  :global(::highlight(bisect-trace-selection)) {
+    background-color: Highlight;
+    color: HighlightText;
+  }
+
   .trace-panel {
     box-sizing: border-box;
     width: min(28rem, calc(100vw - 2rem));

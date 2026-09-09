@@ -42,6 +42,7 @@
   let verificationAttempt = $state(0);
   let verificationForm = $state<HTMLFormElement>();
   let verificationDialog = $state<HTMLDialogElement>();
+  let allowanceDialog = $state<HTMLDialogElement>();
   let verificationVisible = $state(false);
   const automatedCheckMessage = "Running an automated check to help keep bots out...";
   let canSend = $derived(
@@ -72,7 +73,7 @@
 
   $effect(() => {
     if (!verificationDialog) return;
-    if (!data.session && !data.loadError) {
+    if (!data.session && !data.loadError && !data.allowanceMessage) {
       if (!verificationDialog.open) verificationDialog.showModal();
       verificationVisible = true;
     } else {
@@ -87,9 +88,19 @@
   });
 
   $effect(() => {
+    if (!allowanceDialog) return;
+    if (data.allowanceMessage) {
+      if (!allowanceDialog.open) allowanceDialog.showModal();
+    } else if (allowanceDialog.open) {
+      allowanceDialog.close();
+    }
+  });
+
+  $effect(() => {
     if (
       !data.session &&
       !data.loadError &&
+      !data.allowanceMessage &&
       !pending &&
       !verificationError &&
       verificationToken &&
@@ -243,9 +254,7 @@
 </svelte:head>
 
 <main>
-  <p>Bisect remembers your messages. Select text in a reply, then click Trace memory.</p>
-
-  {#if feedback}
+  {#if feedback && feedback !== data.allowanceMessage}
     <p role="alert">{feedback}</p>
   {/if}
 
@@ -438,7 +447,7 @@
   {/if}
 
   <dialog
-    class="window verification-panel"
+    class="window service-dialog"
     bind:this={verificationDialog}
     aria-labelledby="verification-title"
     aria-describedby="verification-status"
@@ -484,6 +493,21 @@
       <input type="hidden" name="turnstile_token" value={verificationToken} />
     </form>
   </dialog>
+  <dialog
+    class="window service-dialog"
+    bind:this={allowanceDialog}
+    role="alertdialog"
+    aria-labelledby="allowance-title"
+    aria-describedby="allowance-message"
+  >
+    <header class="title-bar">
+      <div class="title-bar-text" id="allowance-title">Daily limit</div>
+    </header>
+    <form class="window-body" method="dialog">
+      <p id="allowance-message">{data.allowanceMessage}</p>
+      <button type="submit">OK</button>
+    </form>
+  </dialog>
   {#if !data.session && !data.loadError}
     <noscript><p>JavaScript is required to complete verification.</p></noscript>
   {/if}
@@ -501,6 +525,10 @@
 
   main > * {
     flex-shrink: 0;
+  }
+
+  menu[role="tablist"] {
+    margin-top: 2px;
   }
 
   #chat:not([hidden]) {
@@ -636,7 +664,7 @@
     bottom: 0.125rem;
   }
 
-  .verification-panel {
+  .service-dialog {
     box-sizing: border-box;
     width: min(24rem, calc(100vw - 2rem));
     max-height: calc(100dvh - 2rem);
@@ -644,16 +672,16 @@
     overflow: hidden;
   }
 
-  .verification-panel[open] {
+  .service-dialog[open] {
     display: flex;
     flex-direction: column;
   }
 
-  .verification-panel > .title-bar {
+  .service-dialog > .title-bar {
     flex-shrink: 0;
   }
 
-  .verification-panel > .window-body {
+  .service-dialog > .window-body {
     min-width: 0;
     min-height: 0;
     overflow: auto;

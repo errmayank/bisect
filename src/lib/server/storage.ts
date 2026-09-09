@@ -1,6 +1,9 @@
 import { error } from "@sveltejs/kit";
 import { limits, readMemories, type ConversationMessage, type Memory } from "./memory";
 
+export const dailyAllowanceMessage =
+  "Bisect has reached its daily limit. Come back after midnight UTC.";
+
 interface Session {
   id: string;
   conversationVersion: number;
@@ -218,7 +221,7 @@ export async function reserveAiCall(
       error(429, exhausted);
     }
     if ((daily.results[0]?.usedCalls ?? 0) >= limits.dailyCalls) {
-      error(429, "Today's shared AI allowance is used up. It resets at midnight UTC.");
+      error(429, dailyAllowanceMessage);
     }
     error(503, "Could not reserve an AI call. Please try again.");
   }

@@ -2,6 +2,7 @@ import { error, fail, isHttpError } from "@sveltejs/kit";
 import { generateTurn, isRecord, limits } from "$lib/server/memory";
 import {
   createSession,
+  dailyAllowanceMessage,
   loadSession,
   reserveAiCall,
   resetConversation,
@@ -49,16 +50,23 @@ export const load = (async event => {
   const environment = environmentFor(event);
   let state: SessionState | null = null;
   let loadError = "";
+  let allowanceMessage = "";
   const identifier = sessionIdentifier(event.cookies.get(cookieName));
 
-  if (identifier) {
-    try {
+  try {
+    if (identifier) {
       state = await loadSession(environment.DB, identifier);
       if (!state) event.cookies.delete(cookieName, { path: "/" });
-    } catch (cause) {
-      console.error("Failed to load saved conversation:", cause);
-      loadError = "Your saved conversation could not be loaded. Please refresh.";
     }
+    const usage = await environment.DB.prepare(
+      "SELECT reserved_calls AS reservedCalls FROM daily_usage WHERE usage_date = ?",
+    )
+      .bind(new Date().toISOString().slice(0, 10))
+      .first<{ reservedCalls: number }>();
+    if ((usage?.reservedCalls ?? 0) >= limits.dailyCalls) allowanceMessage = dailyAllowanceMessage;
+  } catch (cause) {
+    console.error("Failed to load saved conversation:", cause);
+    loadError = "Your saved conversation could not be loaded. Please refresh.";
   }
 
   return {
@@ -76,6 +84,7 @@ export const load = (async event => {
     siteKey: environment.TURNSTILE_SITE_KEY,
     inputCharacters: limits.inputCharacters,
     selectedCharacters: limits.selectedCharacters,
+    allowanceMessage,
     loadError,
   };
 }) satisfies PageServerLoad;
