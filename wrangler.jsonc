@@ -31,8 +31,8 @@
     },
   ],
   "vars": {
+    "TURNSTILE_HOSTNAME": "bisect.errmayank.workers.dev",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAEsse8l6ZVg99RKF",
-    "TURNSTILE_HOSTNAME": "localhost",
   },
   "secrets": {
     "required": ["TURNSTILE_SECRET_KEY", "MAINTENANCE_MODE"],
